@@ -76,7 +76,10 @@
     {tf:"1M", api:"1M", g:1, label:"M"},
   ];
   const API_SEC = {"1h":3600,"2h":7200,"4h":14400,"12h":43200,"1d":86400,"3d":259200,"1w":604800};
-  const QUICK = ["BTC","ETH","SOL","BNB"];
+  const QUICK = ["BTC","ETH","SOL","BNB","GOLD"];
+  const QUICK_LABEL = {GOLD:"VÀNG"};
+  // Vàng: dùng PAXG (1 token = 1 ounce vàng) trên Binance Spot, có lịch sử từ 2020
+  const GOLD_ALIASES = ["GOLD","XAU","XAUUSD","XAUUSDT","VANG","PAXG","PAXGUSDT"];
   const VISIBLE_BARS = 130;
   const $ = id => document.getElementById(id);
   const fmtNum = v => {
@@ -88,8 +91,9 @@
   // ---------- route ----------
   const params = new URLSearchParams(location.search);
   let symbol = normSym(params.get("sym") || "BTC");
-  function normSym(v){ v = String(v||"BTC").toUpperCase().replace(/[^A-Z0-9]/g,""); if(!v) v="BTC"; return v.endsWith("USDT") ? v : v+"USDT"; }
-  function shortSym(){ return symbol.replace(/USDT$/,""); }
+  function normSym(v){ v = String(v||"BTC").toUpperCase().replace(/[^A-Z0-9]/g,""); if(!v) v="BTC"; if(GOLD_ALIASES.includes(v)) return "PAXGUSDT"; return v.endsWith("USDT") ? v : v+"USDT"; }
+  function shortSym(){ return symbol === "PAXGUSDT" ? "GOLD" : symbol.replace(/USDT$/,""); }
+  function dispName(){ return symbol === "PAXGUSDT" ? "VÀNG (XAU/USD)" : shortSym()+"/USD"; }
 
   // ---------- indicators ----------
   function ema(src,n,key="close"){ const r=[],k=2/(n+1); let p=null; for(let i=0;i<src.length;i++){ const v=src[i][key]; if(i<n-1) continue; if(p===null){ let s=0; for(let j=i-n+1;j<=i;j++) s+=src[j][key]; p=s/n; } else p=v*k+p*(1-k); r.push({time:src[i].time,value:p}); } return r; }
@@ -166,7 +170,7 @@
   }
 
   function updateLinks(){
-    for (const tf in cells) cells[tf].el.querySelector("a").href = `${ORIGINAL}?sym=${shortSym()}&tf=${tf}`;
+    for (const tf in cells) cells[tf].el.querySelector("a").href = `${ORIGINAL}?sym=${symbol.replace(/USDT$/,"")}&tf=${tf}`;
   }
 
   function render(cell, fit){
@@ -253,7 +257,7 @@
   async function loadAll(){
     const my = ++session;
     $("status").textContent = "Đang tải…";
-    $("symName").textContent = shortSym()+"/USD";
+    $("symName").textContent = dispName();
     document.title = `${shortSym()} · Đa khung · XTB-SPRINGTEA`;
     updateLinks(); renderQuick();
     try{ history.replaceState(null,"",`${location.pathname}?sym=${shortSym()}`); }catch(e){}
@@ -312,7 +316,7 @@
   // ---------- controls ----------
   function renderQuick(){
     const host = $("quick");
-    host.innerHTML = QUICK.map(s=>`<button data-s="${s}" class="${s===shortSym()?"active":""}">${s}</button>`).join(" ");
+    host.innerHTML = QUICK.map(s=>`<button data-s="${s}" class="${s===shortSym()?"active":""}">${QUICK_LABEL[s]||s}</button>`).join(" ");
     host.querySelectorAll("button").forEach(b=>b.onclick=()=>{ symbol=normSym(b.dataset.s); loadAll(); });
   }
   $("symGo").onclick = () => { symbol = normSym($("symIn").value); loadAll(); };
