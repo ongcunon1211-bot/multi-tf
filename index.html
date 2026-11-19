@@ -35,6 +35,19 @@
   .pc{flex:7;min-height:0}
   .rc{flex:3;min-height:0;border-top:1px solid var(--line)}
   .status{color:var(--muted);font-size:11px}
+  #coinPanel{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;z-index:50;align-items:flex-start;justify-content:center;padding:60px 16px 16px}
+  #coinPanel.open{display:flex}
+  .cp-box{background:var(--panel);border:1px solid var(--line);border-radius:10px;width:min(560px,100%);max-height:calc(100vh - 80px);display:flex;flex-direction:column;overflow:hidden}
+  .cp-head{display:flex;gap:8px;align-items:center;padding:10px;border-bottom:1px solid var(--line)}
+  .cp-head input{flex:1;width:auto;text-transform:uppercase;padding:7px 10px}
+  .cp-sort{display:flex;gap:6px;padding:8px 10px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted);align-items:center}
+  .cp-list{overflow:auto;flex:1}
+  .cp-row{display:grid;grid-template-columns:1fr 1fr 80px 90px;gap:8px;padding:7px 12px;cursor:pointer;border-bottom:1px solid #161b26;font-variant-numeric:tabular-nums}
+  .cp-row:hover,.cp-row.sel{background:#1a2030}
+  .cp-row b{color:#fff}
+  .cp-row .r{text-align:right}
+  .cp-row .muted{color:var(--muted)}
+  .cp-empty{padding:20px;text-align:center;color:var(--muted)}
 </style>
 </head>
 <body>
@@ -43,6 +56,7 @@
   <span id="quick"></span>
   <input id="symIn" placeholder="Mã coin" />
   <button id="symGo">Xem</button>
+  <button id="allCoinsBtn" title="Chọn trong toàn bộ cặp USDT của Binance">☰ Tất cả coin</button>
   <span class="sym" id="symName">BTC/USD</span>
   <span class="price" id="lastPrice">--</span>
   <span class="chg" id="lastChg"></span>
@@ -56,6 +70,14 @@
   <a class="status" href="https://www.tradingview.com/" target="_blank" rel="noopener" style="text-decoration:none">Charts by TradingView</a>
 </header>
 <div id="grid"></div>
+<div id="coinPanel">
+  <div class="cp-box">
+    <div class="cp-head"><input id="cpSearch" placeholder="Tìm mã coin… (vd: PEPE, DOGE)" autocomplete="off"/><button id="cpClose">Đóng</button></div>
+    <div class="cp-sort"><span id="cpCount">Đang tải…</span><span class="spacer"></span>Sắp xếp:
+      <button data-sort="vol" class="active">Volume</button><button data-sort="chg">% 24h</button><button data-sort="name">A–Z</button></div>
+    <div class="cp-list" id="cpList"></div>
+  </div>
+</div>
 
 <script>
 (function(){
@@ -84,9 +106,17 @@
   const $ = id => document.getElementById(id);
   const fmtNum = v => {
     if (v == null || !isFinite(v)) return "--";
-    const d = v >= 1000 ? 2 : v >= 1 ? 4 : 6;
-    return v.toLocaleString("en-US",{maximumFractionDigits:d});
+    if (v >= 1000) return v.toLocaleString("en-US",{maximumFractionDigits:2});
+    if (v >= 1) return v.toLocaleString("en-US",{maximumFractionDigits:4});
+    return v.toLocaleString("en-US",{maximumSignificantDigits:4, maximumFractionDigits:12});
   };
+  // số chữ số thập phân cho trục giá, để coin giá nhỏ (PEPE, SHIB…) không bị hiện 0.00
+  function pricePrecision(v){
+    if (!(v > 0)) return 2;
+    if (v >= 1000) return 2;
+    if (v >= 1) return 4;
+    return Math.min(12, Math.ceil(-Math.log10(v)) + 3);
+  }
 
   // ---------- route ----------
   const params = new URLSearchParams(location.search);
@@ -176,6 +206,8 @@
   function render(cell, fit){
     const d = cell.data = aggregate(cell.raw, cell.cfg);
     if (!d.length) return;
+    const pp = pricePrecision(d[d.length-1].close), pf = {type:"price",precision:pp,minMove:Math.pow(10,-pp)};
+    cell.candle.applyOptions({priceFormat:pf}); cell.emaS.applyOptions({priceFormat:pf}); cell.wmaS.applyOptions({priceFormat:pf});
     cell.candle.setData(d);
     cell.vol.setData(d.map(c=>({time:c.time,value:c.volume,color:c.close>=c.open?"rgba(38,166,154,.35)":"rgba(239,83,80,.35)"})));
     cell.emaS.setData(ema(d,9));
@@ -321,6 +353,58 @@
   }
   $("symGo").onclick = () => { symbol = normSym($("symIn").value); loadAll(); };
   $("symIn").addEventListener("keydown", e => { if (e.key === "Enter") $("symGo").click(); });
+
+  // ---------- toàn bộ coin Binance (cặp USDT đang giao dịch) ----------
+  let coinList = null, coinSort = "vol", coinSel = 0, coinView = [];
+  async function loadCoinList(){
+    if (coinList) return coinList;
+    const [info, tick] = await Promise.all([
+      fetch(`${API}/api/v3/exchangeInfo?permissions=SPOT&symbolStatus=TRADING`).then(r=>r.json()),
+      fetch(`${API}/api/v3/ticker/24hr?type=MINI`).then(r=>r.json()),
+    ]);
+    const tmap = {}; for (const t of tick) tmap[t.symbol] = t;
+    coinList = info.symbols.filter(x=>x.quoteAsset==="USDT").map(x=>{
+      const t = tmap[x.symbol] || {}, last = +t.lastPrice || 0, open = +t.openPrice || 0;
+      return {sym:x.symbol, base:x.baseAsset, price:last, chg: open ? (last-open)/open*100 : 0, vol:+t.quoteVolume || 0};
+    });
+    $("allCoinsBtn").textContent = `☰ Tất cả coin (${coinList.length})`;
+    return coinList;
+  }
+  const fmtVol = v => v>=1e9 ? (v/1e9).toFixed(2)+"B" : v>=1e6 ? (v/1e6).toFixed(1)+"M" : v>=1e3 ? (v/1e3).toFixed(0)+"K" : v.toFixed(0);
+  function renderCoinList(){
+    if (!coinList) return;
+    const q = $("cpSearch").value.trim().toUpperCase().replace(/[^A-Z0-9]/g,"");
+    let v = coinList.filter(c=>!q || c.base.includes(q));
+    if (q) v.sort((a,b)=>(b.base===q)-(a.base===q) || (b.base.startsWith(q))-(a.base.startsWith(q)) || b.vol-a.vol);
+    else if (coinSort==="vol") v.sort((a,b)=>b.vol-a.vol);
+    else if (coinSort==="chg") v.sort((a,b)=>b.chg-a.chg);
+    else v.sort((a,b)=>a.base.localeCompare(b.base));
+    coinView = v; coinSel = Math.min(coinSel, Math.max(0,v.length-1));
+    $("cpCount").textContent = `${v.length} / ${coinList.length} cặp USDT`;
+    $("cpList").innerHTML = v.length ? v.map((c,i)=>`<div class="cp-row${i===coinSel?" sel":""}${c.sym===symbol?" sel":""}" data-sym="${c.sym}"><span><b>${c.base}</b><span class="muted">/USDT</span></span><span class="r">${fmtNum(c.price)}</span><span class="r" style="color:${c.chg>=0?"var(--up)":"var(--down)"}">${c.chg>=0?"+":""}${c.chg.toFixed(2)}%</span><span class="r muted">${fmtVol(c.vol)}</span></div>`).join("") : `<div class="cp-empty">Không tìm thấy “${q}” trên Binance</div>`;
+  }
+  function pickCoin(sym){ $("coinPanel").classList.remove("open"); symbol = normSym(sym); loadAll(); }
+  async function openCoinPanel(){
+    $("coinPanel").classList.add("open"); $("cpSearch").value = ""; coinSel = 0;
+    setTimeout(()=>$("cpSearch").focus(), 30);
+    try{ await loadCoinList(); renderCoinList(); }
+    catch(e){ $("cpCount").textContent = "Không tải được danh sách coin từ Binance"; }
+  }
+  $("allCoinsBtn").onclick = openCoinPanel;
+  $("cpClose").onclick = () => $("coinPanel").classList.remove("open");
+  $("coinPanel").addEventListener("click", e => { if (e.target.id === "coinPanel") $("coinPanel").classList.remove("open"); });
+  $("cpList").addEventListener("click", e => { const r = e.target.closest(".cp-row"); if (r) pickCoin(r.dataset.sym); });
+  $("cpSearch").addEventListener("input", () => { coinSel = 0; renderCoinList(); });
+  $("cpSearch").addEventListener("keydown", e => {
+    if (e.key === "ArrowDown"){ e.preventDefault(); coinSel = Math.min(coinSel+1, coinView.length-1); renderCoinList(); $("cpList").querySelectorAll(".cp-row")[coinSel]?.scrollIntoView({block:"nearest"}); }
+    else if (e.key === "ArrowUp"){ e.preventDefault(); coinSel = Math.max(coinSel-1, 0); renderCoinList(); $("cpList").querySelectorAll(".cp-row")[coinSel]?.scrollIntoView({block:"nearest"}); }
+    else if (e.key === "Enter" && coinView[coinSel]) pickCoin(coinView[coinSel].sym);
+    else if (e.key === "Escape") $("coinPanel").classList.remove("open");
+  });
+  document.querySelectorAll(".cp-sort button").forEach(b => b.onclick = () => {
+    coinSort = b.dataset.sort; document.querySelectorAll(".cp-sort button").forEach(x=>x.classList.toggle("active", x===b)); renderCoinList();
+  });
+  loadCoinList().catch(()=>{});
 
   function fitHeader(){ document.documentElement.style.setProperty("--hdr", ($("hdr").offsetHeight)+"px"); }
   window.addEventListener("resize", fitHeader);
