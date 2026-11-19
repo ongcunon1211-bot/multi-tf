@@ -50,7 +50,7 @@
   <span class="legend">
     <span><i style="background:#f0b90b"></i>EMA 9</span>
     <span><i style="background:#2962ff"></i>WMA 45</span>
-    <span><i style="background:#ff9800"></i>RSI 14</span>
+    <span><i style="background:#ff2d2d"></i>RSI 14</span>
   </span>
   <span class="status" id="status">Đang tải…</span>
 </header>
@@ -150,7 +150,7 @@
       const wmaS = pc.addLineSeries({color:"#2962ff",lineWidth:1,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
       const vol = pc.addHistogramSeries({priceScaleId:"",priceFormat:{type:"volume"},lastValueVisible:false,priceLineVisible:false});
       pc.priceScale("").applyOptions({scaleMargins:{top:.82,bottom:0}});
-      const rsiS = rc.addLineSeries({color:"#ff9800",lineWidth:1,priceLineVisible:false});
+      const rsiS = rc.addLineSeries({color:"#ff2d2d",lineWidth:1,priceLineVisible:false});
       const rsiEma = rc.addLineSeries({color:"#f0b90b",lineWidth:1,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
       const rsiWma = rc.addLineSeries({color:"#2962ff",lineWidth:1,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
       [70,50,30].forEach(v=>rsiS.createPriceLine({price:v,color:v===50?"#2a3040":"#3a4256",lineWidth:1,lineStyle:2,axisLabelVisible:false}));
