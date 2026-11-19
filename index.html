@@ -53,6 +53,7 @@
     <span><i style="background:#ff2d2d"></i>RSI 14</span>
   </span>
   <span class="status" id="status">Đang tải…</span>
+  <a class="status" href="https://www.tradingview.com/" target="_blank" rel="noopener" style="text-decoration:none">Charts by TradingView</a>
 </header>
 <div id="grid"></div>
 
@@ -123,7 +124,7 @@
   function baseOpts(showTime){
     return {
       autoSize:true,
-      layout:{background:{type:"solid",color:"#11151d"},textColor:"#7a8194",fontSize:10},
+      layout:{background:{type:"solid",color:"#11151d"},textColor:"#7a8194",fontSize:10,attributionLogo:false},
       grid:{vertLines:{color:"#161b26"},horzLines:{color:"#161b26"}},
       rightPriceScale:{borderColor:"#1f2533",minimumWidth:62},
       timeScale:{borderColor:"#1f2533",visible:showTime,rightOffset:4,tickMarkFormatter:tickFmt},
