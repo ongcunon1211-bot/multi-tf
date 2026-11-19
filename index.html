@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>XTB-SPRINGTEA · Đa khung thời gian</title>
+<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root{--bg:#0b0e14;--panel:#11151d;--line:#1f2533;--text:#d1d4dc;--muted:#7a8194;--up:#26a69a;--down:#ef5350;--accent:#2962ff}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:13px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  header{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 12px;border-bottom:1px solid var(--line);height:auto}
+  .brand{font-weight:800;letter-spacing:.5px}
+  .sym{font-weight:700}
+  .price{font-weight:700;font-size:15px}
+  .chg.up{color:var(--up)} .chg.down{color:var(--down)}
+  .spacer{flex:1}
+  button,input{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:4px 9px;font:inherit}
+  button{cursor:pointer} button:hover{border-color:#3a4256}
+  button.active{background:var(--accent);border-color:var(--accent);color:#fff}
+  input{width:90px;text-transform:uppercase}
+  .legend{display:flex;gap:10px;color:var(--muted);font-size:11px}
+  .legend i{display:inline-block;width:10px;height:2px;vertical-align:middle;margin-right:4px}
+  #grid{display:grid;gap:6px;padding:6px;height:calc(100vh - var(--hdr,46px));grid-template-columns:repeat(5,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr))}
+  @media (max-width:1200px){#grid{grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:none;grid-auto-rows:360px;height:auto}}
+  @media (max-width:760px){#grid{grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:300px}}
+  @media (max-width:480px){#grid{grid-template-columns:1fr;grid-auto-rows:320px}}
+  .cell{background:var(--panel);border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .cell-head{display:flex;align-items:center;gap:8px;padding:4px 8px;border-bottom:1px solid var(--line);font-size:12px;white-space:nowrap}
+  .tf-label{font-weight:800;color:#fff;background:#1d2433;border-radius:4px;padding:1px 6px}
+  .cell-head .p{font-weight:600}
+  .cell-head .rsi{color:var(--muted);margin-left:auto}
+  .cell-head a{color:var(--muted);text-decoration:none;font-size:14px}
+  .cell-head a:hover{color:#fff}
+  .pc{flex:7;min-height:0}
+  .rc{flex:3;min-height:0;border-top:1px solid var(--line)}
+  .status{color:var(--muted);font-size:11px}
+</style>
+</head>
+<body>
+<header id="hdr">
+  <span class="brand">XTB-SPRINGTEA</span>
+  <span id="quick"></span>
+  <input id="symIn" placeholder="Mã coin" />
+  <button id="symGo">Xem</button>
+  <span class="sym" id="symName">BTC/USD</span>
+  <span class="price" id="lastPrice">--</span>
+  <span class="chg" id="lastChg"></span>
+  <span class="spacer"></span>
+  <span class="legend">
+    <span><i style="background:#f0b90b"></i>EMA 9</span>
+    <span><i style="background:#2962ff"></i>WMA 45</span>
+    <span><i style="background:#ff9800"></i>RSI 14</span>
+  </span>
+  <span class="status" id="status">Đang tải…</span>
+</header>
+<div id="grid"></div>
+
+<script>
+(function(){
+  const API = "https://api.binance.com";
+  const WS  = "wss://stream.binance.com:9443/stream?streams=";
+  const ORIGINAL = "https://xtb-springtea.github.io/web-v2/";
+  const TZ = 7*3600; // UTC+7 như trang gốc
+  const TFS = [
+    {tf:"1h", api:"1h", g:1, label:"1H"},
+    {tf:"2h", api:"2h", g:1, label:"2H"},
+    {tf:"4h", api:"4h", g:1, label:"4H"},
+    {tf:"12h",api:"12h",g:1, label:"12H"},
+    {tf:"1d", api:"1d", g:1, label:"1D"},
+    {tf:"2d", api:"1d", g:2, label:"2D"},
+    {tf:"3d", api:"3d", g:1, label:"3D"},
+    {tf:"1w", api:"1w", g:1, label:"W"},
+    {tf:"2w", api:"1w", g:2, label:"2W"},
+    {tf:"1M", api:"1M", g:1, label:"M"},
+  ];
+  const API_SEC = {"1h":3600,"2h":7200,"4h":14400,"12h":43200,"1d":86400,"3d":259200,"1w":604800};
+  const QUICK = ["BTC","ETH","SOL","BNB"];
+  const VISIBLE_BARS = 130;
+  const $ = id => document.getElementById(id);
+  const fmtNum = v => {
+    if (v == null || !isFinite(v)) return "--";
+    const d = v >= 1000 ? 2 : v >= 1 ? 4 : 6;
+    return v.toLocaleString("en-US",{maximumFractionDigits:d});
+  };
+
+  // ---------- route ----------
+  const params = new URLSearchParams(location.search);
+  let symbol = normSym(params.get("sym") || "BTC");
+  function normSym(v){ v = String(v||"BTC").toUpperCase().replace(/[^A-Z0-9]/g,""); if(!v) v="BTC"; return v.endsWith("USDT") ? v : v+"USDT"; }
+  function shortSym(){ return symbol.replace(/USDT$/,""); }
+
+  // ---------- indicators ----------
+  function ema(src,n,key="close"){ const r=[],k=2/(n+1); let p=null; for(let i=0;i<src.length;i++){ const v=src[i][key]; if(i<n-1) continue; if(p===null){ let s=0; for(let j=i-n+1;j<=i;j++) s+=src[j][key]; p=s/n; } else p=v*k+p*(1-k); r.push({time:src[i].time,value:p}); } return r; }
+  function wma(src,n,key="close"){ const r=[],ws=n*(n+1)/2; for(let i=n-1;i<src.length;i++){ let s=0; for(let j=0;j<n;j++) s+=src[i-j][key]*(n-j); r.push({time:src[i].time,value:s/ws}); } return r; }
+  function rsi(src,n=14){ const r=[]; if(src.length<=n+1) return r; let g=0,l=0; for(let i=1;i<=n;i++){ const d=src[i].close-src[i-1].close; d>=0?g+=d:l-=d; } let ag=g/n,al=l/n; for(let i=n+1;i<src.length;i++){ const d=src[i].close-src[i-1].close; ag=(ag*(n-1)+(d>0?d:0))/n; al=(al*(n-1)+(d<0?-d:0))/n; const rs=al===0?100:ag/al; r.push({time:src[i].time,value:100-100/(1+rs)}); } return r; }
+
+  // ---------- aggregation (2D / 2W) ----------
+  function bucketStart(t, cfg){
+    if (cfg.g === 1) return t;
+    const span = API_SEC[cfg.api]*cfg.g;
+    const anchor = cfg.api === "1w" ? 4*86400 : 0; // tuần Binance bắt đầu thứ Hai (05/01/1970)
+    return Math.floor((t-anchor)/span)*span + anchor;
+  }
+  function aggregate(raw, cfg){
+    if (cfg.g === 1) return raw.map(c=>({...c}));
+    const out=[]; let cur=null;
+    for (const c of raw){
+      const b = bucketStart(c.time,cfg);
+      if (!cur || cur.time !== b){ cur={time:b,open:c.open,high:c.high,low:c.low,close:c.close,volume:c.volume}; out.push(cur); }
+      else { cur.high=Math.max(cur.high,c.high); cur.low=Math.min(cur.low,c.low); cur.close=c.close; cur.volume+=c.volume; }
+    }
+    return out;
+  }
+  const toCandle = k => ({time:Math.floor(k[0]/1000),open:+k[1],high:+k[2],low:+k[3],close:+k[4],volume:+k[5]});
+
+  // ---------- chart helpers ----------
+  const pad2 = n => String(n).padStart(2,"0");
+  const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const local = t => new Date((t+TZ)*1000);
+  function timeFmt(t){ const d=local(t); return `${pad2(d.getUTCDate())}/${pad2(d.getUTCMonth()+1)}/${d.getUTCFullYear()} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`; }
+  function tickFmt(t, type){ const d=local(t); if(type===0) return String(d.getUTCFullYear()); if(type===1) return MON[d.getUTCMonth()]; if(type===2) return `${pad2(d.getUTCDate())} ${MON[d.getUTCMonth()]}`; return `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`; }
+  function baseOpts(showTime){
+    return {
+      autoSize:true,
+      layout:{background:{type:"solid",color:"#11151d"},textColor:"#7a8194",fontSize:10},
+      grid:{vertLines:{color:"#161b26"},horzLines:{color:"#161b26"}},
+      rightPriceScale:{borderColor:"#1f2533",minimumWidth:62},
+      timeScale:{borderColor:"#1f2533",visible:showTime,rightOffset:4,tickMarkFormatter:tickFmt},
+      localization:{timeFormatter:timeFmt},
+      crosshair:{mode:0},
+      handleScale:{axisPressedMouseMove:true},
+    };
+  }
+
+  // ---------- build grid ----------
+  const cells = {};
+  function buildGrid(){
+    const grid = $("grid");
+    grid.innerHTML = "";
+    for (const cfg of TFS){
+      const el = document.createElement("div");
+      el.className = "cell";
+      el.innerHTML = `<div class="cell-head"><span class="tf-label">${cfg.label}</span><span class="p">--</span><span class="c"></span><span class="rsi">RSI --</span><a target="_blank" rel="noopener" title="Mở khung này ở trang gốc">↗</a></div><div class="pc"></div><div class="rc"></div>`;
+      grid.appendChild(el);
+      const pc = LightweightCharts.createChart(el.querySelector(".pc"), baseOpts(false));
+      const rc = LightweightCharts.createChart(el.querySelector(".rc"), baseOpts(true));
+      const candle = pc.addCandlestickSeries({upColor:"#26a69a",downColor:"#ef5350",borderVisible:false,wickUpColor:"#26a69a",wickDownColor:"#ef5350"});
+      const emaS = pc.addLineSeries({color:"#f0b90b",lineWidth:1,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
+      const wmaS = pc.addLineSeries({color:"#2962ff",lineWidth:1,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
+      const vol = pc.addHistogramSeries({priceScaleId:"",priceFormat:{type:"volume"},lastValueVisible:false,priceLineVisible:false});
+      pc.priceScale("").applyOptions({scaleMargins:{top:.82,bottom:0}});
+      const rsiS = rc.addLineSeries({color:"#ff9800",lineWidth:1,priceLineVisible:false});
+      const rsiEma = rc.addLineSeries({color:"#f0b90b",lineWidth:1,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
+      const rsiWma = rc.addLineSeries({color:"#2962ff",lineWidth:1,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
+      [70,50,30].forEach(v=>rsiS.createPriceLine({price:v,color:v===50?"#2a3040":"#3a4256",lineWidth:1,lineStyle:2,axisLabelVisible:false}));
+      rc.priceScale("right").applyOptions({scaleMargins:{top:.08,bottom:.08}});
+      // đồng bộ cuộn/zoom giữa giá và RSI
+      let lock=false;
+      const sync=(a,b)=>a.timeScale().subscribeVisibleLogicalRangeChange(r=>{ if(lock||!r) return; lock=true; b.timeScale().setVisibleLogicalRange(r); lock=false; });
+      sync(pc,rc); sync(rc,pc);
+      cells[cfg.tf] = {cfg,el,pc,rc,candle,emaS,wmaS,vol,rsiS,rsiEma,rsiWma,raw:[],data:[]};
+    }
+    updateLinks();
+  }
+
+  function updateLinks(){
+    for (const tf in cells) cells[tf].el.querySelector("a").href = `${ORIGINAL}?sym=${shortSym()}&tf=${tf}`;
+  }
+
+  function render(cell, fit){
+    const d = cell.data = aggregate(cell.raw, cell.cfg);
+    if (!d.length) return;
+    cell.candle.setData(d);
+    cell.vol.setData(d.map(c=>({time:c.time,value:c.volume,color:c.close>=c.open?"rgba(38,166,154,.35)":"rgba(239,83,80,.35)"})));
+    cell.emaS.setData(ema(d,9));
+    cell.wmaS.setData(wma(d,45));
+    const r = rsi(d,14);
+    cell.rsiS.setData(r);
+    const rr = r.map(x=>({time:x.time,close:x.value}));
+    cell.rsiEma.setData(ema(rr,9));
+    cell.rsiWma.setData(wma(rr,45));
+    if (fit){
+      const n=d.length, range={from:Math.max(0,n-VISIBLE_BARS),to:n+4};
+      cell.pc.timeScale().setVisibleLogicalRange(range);
+      cell.rc.timeScale().setVisibleLogicalRange(range);
+    }
+    updateHead(cell, r.length ? r[r.length-1].value : null);
+  }
+
+  function updateHead(cell, rsiVal){
+    const last = cell.data[cell.data.length-1];
+    if (!last) return;
+    const pct = last.open ? (last.close-last.open)/last.open*100 : 0;
+    const h = cell.el.querySelector(".cell-head");
+    h.querySelector(".p").textContent = fmtNum(last.close);
+    const c = h.querySelector(".c");
+    c.textContent = (pct>=0?"+":"")+pct.toFixed(2)+"%";
+    c.style.color = pct>=0 ? "var(--up)" : "var(--down)";
+    if (rsiVal != null) h.querySelector(".rsi").textContent = "RSI " + rsiVal.toFixed(1);
+  }
+
+  // Cập nhật realtime nhẹ: chỉ cây nến cuối, tránh vẽ lại toàn bộ
+  function applyLive(cell, k){
+    const raw = cell.raw;
+    if (!raw.length) return;
+    const lastRaw = raw[raw.length-1];
+    if (k.time === lastRaw.time) raw[raw.length-1] = k;
+    else if (k.time > lastRaw.time) raw.push(k);
+    else return;
+    const cfg = cell.cfg, d = cell.data;
+    const b = bucketStart(k.time,cfg);
+    const last = d[d.length-1];
+    let bar;
+    if (cfg.g === 1){
+      bar = {...k};
+      if (last && last.time === bar.time) d[d.length-1] = bar; else d.push(bar);
+    } else if (last && last.time === b){
+      // tính lại nến gộp từ các nến gốc trong cùng bucket
+      const parts = raw.filter(x=>bucketStart(x.time,cfg)===b);
+      bar = {time:b,open:parts[0].open,high:Math.max(...parts.map(x=>x.high)),low:Math.min(...parts.map(x=>x.low)),close:parts[parts.length-1].close,volume:parts.reduce((s,x)=>s+x.volume,0)};
+      d[d.length-1] = bar;
+    } else {
+      bar = {time:b,open:k.open,high:k.high,low:k.low,close:k.close,volume:k.volume};
+      d.push(bar);
+    }
+    cell.candle.update(bar);
+    cell.vol.update({time:bar.time,value:bar.volume,color:bar.close>=bar.open?"rgba(38,166,154,.35)":"rgba(239,83,80,.35)"});
+    // EMA/WMA/RSI: tính lại trên đuôi dữ liệu (đủ chính xác và nhẹ)
+    const tail = d.slice(-400);
+    const e = ema(tail,9), w = wma(tail,45), r = rsi(tail,14);
+    if (e.length) cell.emaS.update(e[e.length-1]);
+    if (w.length) cell.wmaS.update(w[w.length-1]);
+    if (r.length){
+      cell.rsiS.update(r[r.length-1]);
+      const rr = r.map(x=>({time:x.time,close:x.value}));
+      const re = ema(rr,9), rw = wma(rr,45);
+      if (re.length) cell.rsiEma.update(re[re.length-1]);
+      if (rw.length) cell.rsiWma.update(rw[rw.length-1]);
+    }
+    updateHead(cell, r.length ? r[r.length-1].value : null);
+  }
+
+  // ---------- data loading ----------
+  let session = 0, ws = null, wsRetry = null;
+  async function fetchKlines(sym, interval, limit){
+    const res = await fetch(`${API}/api/v3/klines?symbol=${sym}&interval=${interval}&limit=${limit}`);
+    if (!res.ok) throw new Error("HTTP "+res.status);
+    return (await res.json()).map(toCandle);
+  }
+
+  async function loadAll(){
+    const my = ++session;
+    $("status").textContent = "Đang tải…";
+    $("symName").textContent = shortSym()+"/USD";
+    document.title = `${shortSym()} · Đa khung · XTB-SPRINGTEA`;
+    updateLinks(); renderQuick();
+    try{ history.replaceState(null,"",`${location.pathname}?sym=${shortSym()}`); }catch(e){}
+    if (ws){ try{ ws.onclose=null; ws.close(); }catch(e){} ws=null; }
+    clearTimeout(wsRetry);
+    // 1D và 1W dùng chung cho 2D/2W → mỗi interval gốc chỉ tải 1 lần
+    const apis = [...new Set(TFS.map(c=>c.api))];
+    let errors = 0;
+    const rawByApi = {};
+    await Promise.all(apis.map(async a=>{
+      try{ rawByApi[a] = await fetchKlines(symbol, a, 1000); }
+      catch(e){ errors++; rawByApi[a] = []; }
+    }));
+    if (my !== session) return;
+    for (const cfg of TFS){
+      const cell = cells[cfg.tf];
+      cell.raw = rawByApi[cfg.api].slice();
+      render(cell, true);
+    }
+    const d1 = rawByApi["1d"], h1 = rawByApi["1h"];
+    if (errors === apis.length){
+      $("status").textContent = "Không tải được dữ liệu Binance (mã coin sai hoặc mạng bị chặn)";
+      return;
+    }
+    $("status").textContent = errors ? `Thiếu ${errors} khung` : "Realtime";
+    if (h1 && h1.length) setHeaderPrice(h1[h1.length-1].close, d1);
+    openWs(my, apis);
+  }
+
+  function setHeaderPrice(price, d1){
+    $("lastPrice").textContent = "$"+fmtNum(price);
+    document.title = `${fmtNum(price)} | ${shortSym()} · Đa khung`;
+    const day = d1 && d1[d1.length-1];
+    if (day){
+      const pct = (price-day.open)/day.open*100;
+      const el = $("lastChg");
+      el.textContent = (pct>=0?"+":"")+pct.toFixed(2)+"% (1D)";
+      el.className = "chg " + (pct>=0?"up":"down");
+    }
+  }
+
+  function openWs(my, apis){
+    const s = symbol.toLowerCase();
+    ws = new WebSocket(WS + apis.map(a=>`${s}@kline_${a}`).join("/"));
+    ws.onmessage = ev => {
+      if (my !== session) return;
+      const m = JSON.parse(ev.data), k = m.data && m.data.k;
+      if (!k) return;
+      const c = {time:Math.floor(k.t/1000),open:+k.o,high:+k.h,low:+k.l,close:+k.c,volume:+k.v};
+      for (const cfg of TFS) if (cfg.api === k.i) applyLive(cells[cfg.tf], c);
+      if (k.i === "1h") setHeaderPrice(c.close, cells["1d"].raw);
+    };
+    ws.onclose = () => { if (my !== session) return; $("status").textContent = "Mất kết nối, đang nối lại…"; wsRetry = setTimeout(()=>{ if(my===session) loadAll(); }, 4000); };
+  }
+
+  // ---------- controls ----------
+  function renderQuick(){
+    const host = $("quick");
+    host.innerHTML = QUICK.map(s=>`<button data-s="${s}" class="${s===shortSym()?"active":""}">${s}</button>`).join(" ");
+    host.querySelectorAll("button").forEach(b=>b.onclick=()=>{ symbol=normSym(b.dataset.s); loadAll(); });
+  }
+  $("symGo").onclick = () => { symbol = normSym($("symIn").value); loadAll(); };
+  $("symIn").addEventListener("keydown", e => { if (e.key === "Enter") $("symGo").click(); });
+
+  function fitHeader(){ document.documentElement.style.setProperty("--hdr", ($("hdr").offsetHeight)+"px"); }
+  window.addEventListener("resize", fitHeader);
+  fitHeader();
+  buildGrid();
+  loadAll();
+})();
+</script>
+</body>
+</html>
